@@ -1,4 +1,38 @@
 <!DOCTYPE html>
+<!--
+  ============================================================
+    PENGUIN DASH
+    A 2D infinite runner set on an Antarctic ice field.
+
+    Author : Anirudh V
+    Date   : August 2026
+  ============================================================
+
+  HOW THIS FILE IS PUT TOGETHER
+  -----------------------------
+  Everything lives in this one file, in three parts:
+
+    1. <style>  — how the menus and buttons look
+    2. <body>   — the canvas plus the menu screens layered on top
+    3. <script> — the whole game
+
+  The game itself is drawn on a <canvas>, which is basically a
+  blank rectangle we repaint about 60 times a second. Each repaint
+  is called a "frame". Every frame we do two jobs:
+
+    UPDATE — move everything a tiny bit and check for crashes
+    DRAW   — paint the new picture
+
+  Do that fast enough and it looks like smooth motion, the same
+  way a flip-book does.
+
+  THE ONE IDEA THAT MAKES THE GAME WORK
+  -------------------------------------
+  The penguin never actually moves forward. He stays at the same
+  spot on the screen and the whole world slides left past him.
+  That is why the ground, the icebergs and the snowflakes all
+  share one "speed" value.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -158,18 +192,58 @@
   .hint{margin:2px 0 0;color:rgba(143,199,232,.75);font-size:13px}
   .best{font-family:var(--display);font-weight:600;color:var(--aurora-2);font-size:15px;margin:0}
 
-  /* ---------- touch chrome ---------- */
-  #pauseBtn{
-    position:absolute; top:12px; left:50%; transform:translateX(-50%);
-    display:none;
-    font-size:18px; padding:.35em .9em;
-    background:rgba(9,32,58,.6);
-    color:var(--ice);
-    box-shadow:inset 0 0 0 2px rgba(220,243,255,.4);
-    z-index:5;
+  /* ---------- top-right controls ---------- */
+  #controls{
+    position:absolute; top:14px; right:14px;
+    display:flex; gap:8px; align-items:flex-start;
+    z-index:6;
   }
-  #pauseBtn:active{transform:translateX(-50%) translateY(2px)}
-  #pauseBtn.on{display:block}
+  .ctl{
+    width:38px; height:38px;
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--body); font-size:16px; line-height:1;
+    color:var(--ice);
+    background:transparent;
+    border-radius:12px;
+    box-shadow:inset 0 0 0 1.5px rgba(220,243,255,.35);
+    padding:0;
+    transition:background .15s ease, box-shadow .15s ease;
+  }
+  .ctl:hover{background:rgba(220,243,255,.14);box-shadow:inset 0 0 0 1.5px rgba(220,243,255,.7)}
+  .ctl:active{transform:translateY(2px);box-shadow:inset 0 0 0 1.5px rgba(220,243,255,.7)}
+  .ctl[aria-expanded="true"]{background:rgba(220,243,255,.18)}
+  .ctl.off{color:rgba(220,243,255,.4)}
+  .ctl:disabled{opacity:.3;pointer-events:none}
+
+  #musicWrap{position:relative}
+  #musicMenu{
+    position:absolute; top:46px; right:0;
+    display:none;
+    flex-direction:column;
+    min-width:172px;
+    padding:6px;
+    background:rgba(7,24,45,.95);
+    border-radius:14px;
+    box-shadow:inset 0 0 0 1.5px rgba(220,243,255,.28), 0 12px 30px rgba(0,0,0,.5);
+  }
+  #musicMenu.show{display:flex}
+  #musicMenu button{
+    all:unset;
+    display:flex; align-items:center; gap:9px;
+    font-family:var(--body); font-weight:700; font-size:14px;
+    color:var(--ice);
+    padding:9px 12px;
+    border-radius:9px;
+    cursor:pointer;
+  }
+  #musicMenu button:hover{background:rgba(220,243,255,.13)}
+  #musicMenu button:focus-visible{outline:2px solid var(--aurora-1);outline-offset:-2px}
+  #musicMenu button .tick{width:12px;color:var(--aurora-1);font-size:12px}
+  #musicMenu .lbl{
+    font-size:11px; letter-spacing:1.4px; font-weight:700;
+    color:rgba(143,199,232,.65);
+    padding:6px 12px 4px;
+  }
 
   #portraitTip{
     position:fixed; left:0; right:0; bottom:14px;
@@ -192,7 +266,16 @@
 <div id="stage">
   <canvas id="game" width="960" height="440" aria-label="Penguin Dash game"></canvas>
 
-  <button id="pauseBtn" aria-label="Pause">❚❚</button>
+  <div id="controls">
+    <button id="pauseBtn" class="ctl" aria-label="Pause">❚❚</button>
+    <button id="muteBtn" class="ctl" aria-label="Mute sound">🔊</button>
+    <div id="musicWrap">
+      <button id="musicBtn" class="ctl" aria-label="Choose music" aria-expanded="false">♪</button>
+      <div id="musicMenu" role="menu">
+        <div class="lbl">MUSIC</div>
+      </div>
+    </div>
+  </div>
 
   <!-- MAIN MENU -->
   <div class="screen show" id="menu">
@@ -263,41 +346,239 @@
 
 /* ============================================================
    SETUP
+   Constants and the handful of variables the whole game shares.
 ============================================================ */
 const cv  = document.getElementById("game");
-const ctx = cv.getContext("2d");
+const ctx = cv.getContext("2d");     // ctx is the "paintbrush" for the canvas
+
+// We always think in a pretend 960x440 world, no matter how big the
+// screen really is. The browser stretches it to fit, so the game plays
+// identically on a laptop and on a phone.
 const W = 960, H = 440;
-const GROUND_Y = 358;          // top surface of the ice
+const GROUND_Y = 358;          // top surface of the ice. Smaller y = higher up!
 const SPEED = 385;             // world speed, px/sec — never increases
 
+// Retina screens pack extra pixels into the same space. Drawing at that
+// higher resolution stops everything looking blurry. (Capped at 2 so a
+// very fancy screen doesn't make the game slow.)
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
 cv.width = W * dpr; cv.height = H * dpr;
 ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-const el = id => document.getElementById(id);
+const el = id => document.getElementById(id);   // shortcut, used everywhere
+
+// The menu, instructions, pause and game-over panels are ordinary HTML
+// sitting on top of the canvas. Only one is ever visible at a time.
 const screens = { menu: el("menu"), howto: el("howto"), paused: el("paused"), over: el("over") };
 function showScreen(name){
   for (const k in screens) screens[k].classList.toggle("show", k === name);
 }
 
+// "state" is the single most important variable in the file. Almost
+// everything checks it before acting: should we move? accept a jump?
+// draw the HUD? Pass "" to showScreen to hide every panel.
 let state = "menu";   // menu | howto | playing | paused | dying | over
-let best = 0;         // session best (kept in memory)
+let best = 0;         // best score this visit (forgotten on reload)
 
-/* ---------- tiny sound kit ---------- */
+/* ---------- audio ----------
+   Web Audio works like plugging cables between boxes. Every sound goes
+   into either sfxGain (blips) or musicGain (the song), both of those
+   feed masterGain, and masterGain feeds the speakers. Muting is then
+   just turning that one master box down to zero.
+
+   Browsers refuse to make noise until the user clicks something, so we
+   don't build any of this until the first click or key press.
+--------------------------------------------------------------- */
 let actx = null, muted = false;
-function beep(freq, dur = .09, type = "square", vol = .05, slideTo = null){
-  if (muted) return;
+let masterGain = null, sfxGain = null, musicGain = null;
+
+function initAudio(){
+  if (actx) return true;                       // already built, nothing to do
   try{
-    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-    if (actx.state === "suspended") actx.resume();
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    masterGain = actx.createGain(); masterGain.gain.value = muted ? 0 : 1;
+    masterGain.connect(actx.destination);      // destination = the speakers
+    sfxGain = actx.createGain();   sfxGain.gain.value = 1;   sfxGain.connect(masterGain);
+    musicGain = actx.createGain(); musicGain.gain.value = .5; musicGain.connect(masterGain);
+    return true;
+  }catch(e){ return false; }                   // no audio? game still works
+}
+function resumeAudio(){
+  if (actx && actx.state === "suspended") actx.resume();
+}
+
+// One short sound effect. An oscillator makes a raw tone; the gain node
+// fades it out fast so it goes "blip" instead of droning forever.
+function beep(freq, dur = .09, type = "square", vol = .05, slideTo = null){
+  if (muted || !initAudio()) return;
+  try{
+    resumeAudio();
     const o = actx.createOscillator(), g = actx.createGain();
     o.type = type; o.frequency.setValueAtTime(freq, actx.currentTime);
+    // slideTo bends the pitch up or down while it plays — that's what
+    // makes the jump sound "whoop" and the crash sound sag.
     if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, actx.currentTime + dur);
     g.gain.setValueAtTime(vol, actx.currentTime);
     g.gain.exponentialRampToValueAtTime(.0001, actx.currentTime + dur);
-    o.connect(g); g.connect(actx.destination);
+    o.connect(g); g.connect(sfxGain);
     o.start(); o.stop(actx.currentTime + dur + .02);
   }catch(e){/* audio is optional */}
+}
+
+/* ============================================================
+   MUSIC
+   Two looping tracks, built out of plain oscillators — no sound
+   files, so nothing extra to download or host.
+
+   Each track is four rows of numbers, like sheet music on a grid.
+   The numbers are semitones (piano keys) counted from C, and null
+   means "rest here". Every row is read left to right, one eighth
+   note at a time, then starts over.
+
+      bass  — the low steady heartbeat
+      lead  — the tune you actually hum
+      chime — sparkly high bell notes
+      kick  — 1 means hit the drum, 0 means don't
+============================================================ */
+
+// Turn a piano-key number into a frequency in Hz. Going up 12 steps
+// doubles the number, which is exactly what "one octave higher" means.
+const NOTE = n => 440 * Math.pow(2, (n - 9) / 12);   // n = semitones from C4
+
+const TRACKS = {
+  snowday: {
+    name: "Snow Day",
+    bpm: 96,
+    // warm and slow, C major pentatonic — nothing sad, nothing frantic
+    bass:  [0, null, 7, null, 5, null, 7, null, -2, null, 5, null, 4, null, 2, null,
+            0, null, 7, null, 5, null, 7, null, -5, null, 2, null, 4, null, 7, null],
+    lead:  [12, 14, 16, null, 19, null, 16, 14, 12, 14, 16, 19, 21, null, 19, null,
+            16, 19, 21, null, 24, null, 21, 19, 16, 14, 12, 14, 16, null, null, null],
+    chime: [24, null, null, 28, null, null, 26, null, 24, null, null, 21, null, null, 19, null,
+            null, null, 26, null, 28, null, null, 31, null, null, 28, null, 26, null, 24, null],
+    kick:  [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0,
+            1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0]
+  },
+  iceslide: {
+    name: "Ice Slide",
+    bpm: 124,
+    // bouncier, same friendly key so it never turns spooky
+    bass:  [0, 0, 7, 7, 5, 5, 4, 4, 2, 2, 7, 7, 5, 5, 0, 0,
+            -5, -5, 2, 2, 4, 4, 7, 7, 5, 5, 4, 4, 2, 2, 7, 7],
+    lead:  [16, 19, 21, 19, 16, 14, 16, null, 19, 21, 24, 21, 19, 16, 14, null,
+            21, 24, 26, 24, 21, 19, 16, null, 19, 16, 14, 16, 19, 21, 19, null],
+    chime: [null, 28, null, 26, null, 24, null, 26, null, 28, null, 31, null, 28, null, 26,
+            null, 31, null, 33, null, 31, null, 28, null, 26, null, 28, null, 24, null, null],
+    kick:  [1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0,
+            1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0]
+  }
+};
+
+const music = {
+  key: "snowday",       // "snowday" | "iceslide" | "off"
+  playing: false,
+  step: 0,
+  nextTime: 0,
+  timer: null
+};
+
+// Play one musical note at an exact moment in the future.
+// The tiny fade in and out ("attack" and "release") stops the click
+// you'd hear if a tone started and stopped at full volume.
+function playNote(freq, when, dur, type, vol, dest){
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = type;
+  o.frequency.setValueAtTime(freq, when);
+  g.gain.setValueAtTime(.0001, when);
+  g.gain.exponentialRampToValueAtTime(vol, when + .02);     // soft attack, no clicks
+  g.gain.exponentialRampToValueAtTime(.0001, when + dur);
+  o.connect(g); g.connect(dest);
+  o.start(when); o.stop(when + dur + .05);
+}
+
+// A drum from scratch: a tone that swoops from 140Hz down to 48Hz in
+// a tenth of a second. Your ear hears that as a thump, not a note.
+function playKick(when){
+  const o = actx.createOscillator(), g = actx.createGain();
+  o.type = "sine";
+  o.frequency.setValueAtTime(140, when);
+  o.frequency.exponentialRampToValueAtTime(48, when + .12);
+  g.gain.setValueAtTime(.28, when);
+  g.gain.exponentialRampToValueAtTime(.0001, when + .16);
+  o.connect(g); g.connect(musicGain);
+  o.start(when); o.stop(when + .2);
+}
+
+// Book all four instruments for column "i" of the grid.
+function scheduleStep(i, when){
+  const t = TRACKS[music.key];
+  if (!t) return;
+  const beat = 60 / t.bpm / 2;                 // eighth notes
+
+  const b = t.bass[i];
+  if (b !== null) playNote(NOTE(b - 24), when, beat * 1.7, "triangle", .22, musicGain);
+
+  const l = t.lead[i];
+  if (l !== null) playNote(NOTE(l - 12), when, beat * 1.25, "square", .075, musicGain);
+
+  const c = t.chime[i];
+  if (c !== null) playNote(NOTE(c - 12), when, beat * 2.2, "sine", .11, musicGain);
+
+  if (t.kick[i]) playKick(when);
+}
+
+/* The timing trick.
+   If we played each note the instant its turn came round, the music
+   would stutter every time the game got busy drawing a frame. So
+   instead this runs 40 times a second and books notes a quarter of a
+   second EARLY. The sound card keeps perfect time on its own, so the
+   music stays rock steady no matter what the game is doing. */
+function musicTick(){
+  if (!music.playing || !actx) return;
+  const t = TRACKS[music.key];
+  const beat = 60 / t.bpm / 2;
+  // look ahead a quarter second so notes land exactly on time
+  while (music.nextTime < actx.currentTime + .25){
+    scheduleStep(music.step % t.bass.length, Math.max(music.nextTime, actx.currentTime));
+    music.step++;
+    music.nextTime += beat;
+  }
+}
+
+function startMusic(){
+  if (music.key === "off" || music.playing) return;
+  if (!initAudio()) return;
+  resumeAudio();
+  music.playing = true;
+  music.step = 0;
+  music.nextTime = actx.currentTime + .08;
+  clearInterval(music.timer);
+  music.timer = setInterval(musicTick, 25);
+  musicTick();
+}
+
+function stopMusic(){
+  music.playing = false;
+  clearInterval(music.timer);
+  music.timer = null;
+}
+
+function setTrack(key){
+  music.key = key;
+  stopMusic();
+  if (key !== "off" && (state === "playing" || state === "paused")) startMusic();
+  renderMusicMenu();
+}
+
+function setMuted(v){
+  muted = v;
+  if (masterGain && actx){
+    masterGain.gain.setTargetAtTime(muted ? 0 : 1, actx.currentTime, .02);
+  }
+  const b = el("muteBtn");
+  b.textContent = muted ? "🔇" : "🔊";
+  b.classList.toggle("off", muted);
+  b.setAttribute("aria-label", muted ? "Unmute sound" : "Mute sound");
 }
 
 /* ============================================================
@@ -310,7 +591,7 @@ addEventListener("keydown", e => {
   if (BLOCK.includes(e.key) || BLOCK.includes(e.code)) e.preventDefault();
   const k = e.key.toLowerCase();
 
-  if (k === "m"){ muted = !muted; return; }
+  if (k === "m"){ initAudio(); setMuted(!muted); return; }
 
   if (k === "w" || e.key === "ArrowUp"){
     keys.jump = true;
@@ -354,9 +635,9 @@ function zoneOf(e){
 
 function onDown(e){
   if (state !== "playing") return;
-  if (e.target && e.target.closest && e.target.closest("button")) return;
+  if (e.target && e.target.closest && e.target.closest("button, #controls")) return;
   e.preventDefault();
-  if (!actx) beep(0, .01, "sine", .0001);       // unlock audio on first touch
+  initAudio(); resumeAudio();                   // unlock audio on first touch
   if (zoneOf(e) === "jump"){
     requestJump();
   } else {
@@ -391,28 +672,81 @@ el("btnBack").onclick   = toMenu;
 el("btnMenu").onclick   = toMenu;
 el("btnQuit").onclick   = toMenu;
 el("btnResume").onclick = togglePause;
-el("pauseBtn").onclick   = () => { if (state === "playing") togglePause(); };
+el("pauseBtn").onclick   = () => { if (state === "playing" || state === "paused") togglePause(); };
+el("muteBtn").onclick    = () => { initAudio(); setMuted(!muted); };
+
+/* ---------- music chooser ---------- */
+function renderMusicMenu(){
+  const menu = el("musicMenu");
+  menu.innerHTML = '<div class="lbl">MUSIC</div>';
+  const entries = [
+    ...Object.keys(TRACKS).map(k => [k, TRACKS[k].name]),
+    ["off", "Off"]
+  ];
+  for (const [key, label] of entries){
+    const b = document.createElement("button");
+    b.setAttribute("role", "menuitem");
+    b.innerHTML = `<span class="tick">${music.key === key ? "✓" : ""}</span><span>${label}</span>`;
+    b.onclick = () => { setTrack(key); closeMusicMenu(); };
+    menu.appendChild(b);
+  }
+}
+function closeMusicMenu(){
+  el("musicMenu").classList.remove("show");
+  el("musicBtn").setAttribute("aria-expanded", "false");
+}
+el("musicBtn").onclick = e => {
+  e.stopPropagation();
+  const open = el("musicMenu").classList.toggle("show");
+  el("musicBtn").setAttribute("aria-expanded", open ? "true" : "false");
+};
+document.addEventListener("click", e => {
+  if (!e.target.closest || !e.target.closest("#musicWrap")) closeMusicMenu();
+});
 
 function updateChrome(){
-  el("pauseBtn").classList.toggle("on", isTouch && state === "playing");
+  const playing = state === "playing", paused = state === "paused";
+  const p = el("pauseBtn");
+  p.textContent = paused ? "▶" : "❚❚";
+  p.setAttribute("aria-label", paused ? "Resume" : "Pause");
+  p.disabled = !(playing || paused);
 }
 
 function toMenu(){
   state = "menu";
   duckPointers.clear(); duckGrace = 0;
+  stopMusic();
   showScreen("menu");
   updateChrome();
   el("menuBest").textContent = best ? `Best run: ${best} points` : "";
 }
 function togglePause(){
-  if (state === "playing"){ state = "paused"; duckPointers.clear(); duckGrace = 0; showScreen("paused"); }
-  else if (state === "paused"){ state = "playing"; showScreen(""); }
+  if (state === "playing"){
+    state = "paused"; duckPointers.clear(); duckGrace = 0;
+    stopMusic();
+    showScreen("paused");
+  } else if (state === "paused"){
+    state = "playing";
+    startMusic();
+    showScreen("");
+  }
   updateChrome();
 }
 
 /* ============================================================
    WORLD OBJECTS
+   Everything the game keeps track of while you play.
 ============================================================ */
+
+/* The penguin. He never moves left or right — only up and down.
+     x        where he sits on screen (fixed)
+     y        his FEET. Small numbers are high in the air.
+     vy       vertical speed. Negative = flying upward.
+     coyote   a few ms of grace after leaving the ground where a
+              jump still counts, so late presses feel fair
+     buffer   the opposite: a jump pressed slightly too early is
+              remembered and fires the moment he lands
+     cycle    counts up forever, used to swing his feet and wings   */
 const peng = {
   x: 150, y: GROUND_Y, vy: 0,
   w: 44, hStand: 56, hDuck: 32,
@@ -421,17 +755,26 @@ const peng = {
   hurtFlash:0
 };
 
+// Each of these is just a list. Things get pushed onto the end when
+// they spawn, and filtered off once they slide past the left edge.
 let obstacles = [], flakes = [], powerups = [], parts = [], stars = [];
-let elapsed = 0, score = 0, flakeCount = 0;
-let spawnTimer = 0, flakeTimer = 0, powerTimer = 0;
-let auroraGlow = 0, shakeT = 0, worldX = 0;
-let deathT = 0;
 
+let elapsed = 0, score = 0, flakeCount = 0;             // this run so far
+let spawnTimer = 0, flakeTimer = 0, powerTimer = 0;     // countdowns to the next spawn
+let auroraGlow = 0, shakeT = 0, worldX = 0;             // effects + how far we've travelled
+let deathT = 0;                                         // how long the crash animation has run
+
+// Power-ups: shield is on or off, the other two are seconds remaining.
 const power = { shield:false, magnet:0, freeze:0 };
 
+/* Gravity and jump strength. These two numbers decide everything about
+   how the jump feels. Roughly: he rises 125px and is in the air for
+   about 0.68 seconds, which comfortably clears the tallest iceberg.
+   Make GRAV bigger for a snappier, heavier jump.                     */
 const GRAV = 2150, JUMP_V = -735;
 
-/* pre-baked starfield */
+/* Stars are generated once at startup rather than every frame, so they
+   stay put in the sky instead of flickering around randomly. */
 for (let i = 0; i < 70; i++){
   stars.push({ x: Math.random()*W, y: Math.random()*230, r: Math.random()*1.4+.4, tw: Math.random()*6 });
 }
@@ -448,12 +791,21 @@ function startRun(){
   state = "playing";
   showScreen("");
   updateChrome();
+  initAudio();
+  startMusic();
   beep(520, .08, "square", .04, 780);
 }
 
 function requestJump(){ peng.buffer = .12; }
 
-/* ---------- spawning ---------- */
+/* ---------- spawning ----------
+   THE DIFFICULTY CURVE. The penguin never speeds up — that would get
+   unfair fast. Instead the gap between obstacles slowly shrinks, from
+   about 1.7s at the start down to a floor of 0.92s. The floor matters:
+   a jump takes 0.68s, so anything tighter would be impossible.        */
+
+// Is this stretch of ground free? Used so a snowflake never spawns
+// hidden inside an iceberg.
 function laneClear(x, pad){
   for (const o of obstacles) if (Math.abs(o.x + o.w/2 - x) < pad) return false;
   for (const p of powerups)  if (Math.abs(p.x - x) < pad) return false;
@@ -479,7 +831,10 @@ function spawnObstacle(){
 }
 let lastKind = "berg";
 
-const PATTERNS = ["low","arch","high","stairs","slide"];
+/* Snowflake patterns. Some are free points at running height; others
+   are deliberately placed where only a jump or a duck will reach them,
+   which is what makes collecting feel like a decision.               */
+const PATTERNS = ["low", "arch", "high", "stairs", "slide"];
 function spawnFlakes(){
   const pat = PATTERNS[(Math.random()*PATTERNS.length)|0];
   const x0 = W + 70;
@@ -528,10 +883,16 @@ function sparkle(x, y, n, color){
 
 /* ============================================================
    UPDATE
+   Runs once per frame. "dt" is how many seconds passed since the
+   last frame (usually about 0.016). Multiplying every movement by
+   dt means the game runs at the same real-world speed whether the
+   screen refreshes 60 or 144 times a second.
 ============================================================ */
 function update(dt){
+  // Freeze power-up: slow the world to 45%, but the penguin's own
+  // animation and jumping stay completely normal.
   const worldSpeed = SPEED * (power.freeze > 0 ? .45 : 1);
-  worldX += worldSpeed * dt;
+  worldX += worldSpeed * dt;              // total distance, used to scroll scenery
 
   if (state === "playing"){
     elapsed += dt;
@@ -549,9 +910,10 @@ function update(dt){
       puff(peng.x, GROUND_Y, 7, "rgba(233,250,255,.9)", 60);
       beep(430, .1, "square", .045, 760);
     }
+    /* --- penguin: apply gravity, then move --- */
     if (!peng.onGround){
-      peng.vy += GRAV * dt;
-      peng.y  += peng.vy * dt;
+      peng.vy += GRAV * dt;               // gravity pulls the speed downward
+      peng.y  += peng.vy * dt;            // the speed moves him
       if (peng.y >= GROUND_Y){
         peng.y = GROUND_Y; peng.vy = 0; peng.onGround = true;
         puff(peng.x, GROUND_Y, 5, "rgba(233,250,255,.75)", 50);
@@ -669,12 +1031,19 @@ function update(dt){
   shakeT = Math.max(0, shakeT - dt);
 }
 
+/* The penguin's collision rectangle — deliberately a few pixels
+   SMALLER than he looks. Players forgive a near miss that should have
+   been a hit, but hate a hit that looked like a near miss.          */
 function hitbox(){
   const h = peng.ducking ? peng.hDuck : peng.hStand;
-  const w = peng.ducking ? peng.w + 14 : peng.w;
+  const w = peng.ducking ? peng.w + 14 : peng.w;   // sliding makes him longer
   return { x: peng.x - w/2 + 4, y: peng.y - h + 4, w: w - 8, h: h - 5 };
 }
 
+/* Did the penguin hit obstacle o?
+   Icebergs are rectangles, so we just check whether the two boxes
+   overlap. Sawblades are round, so we find the closest point on the
+   penguin's box to the blade's centre and measure the distance.     */
 function hits(b, o){
   if (o.kind === "berg"){
     return b.x < o.x + o.w - 6 && b.x + b.w > o.x + 6 &&
@@ -691,6 +1060,7 @@ function hits(b, o){
 function die(){
   state = "dying";
   duckPointers.clear(); duckGrace = 0;
+  stopMusic();
   updateChrome();
   deathT = 0;
   peng.vy = -430; peng.onGround = false; peng.ducking = false;
@@ -709,10 +1079,17 @@ function gameOver(){
   el("bestLine").textContent    = isBest ? "New best run!" : `Best run: ${best} points`;
   el("overLine").textContent    = score === 0 ? "Off to a slippery start." : "Nice run.";
   showScreen("over");
+  updateChrome();
 }
 
 /* ============================================================
    DRAWING — background
+   Drawn back to front, like stage scenery: sky, then aurora, then
+   three ranges of ice hills, then the ground, then falling snow.
+
+   PARALLAX: each layer scrolls at a different fraction of worldX.
+   Distant hills creep along at 6% speed, nearer ones at 28%. Your
+   brain reads that difference as depth.
 ============================================================ */
 function drawSky(t){
   const g = ctx.createLinearGradient(0, 0, 0, GROUND_Y);
@@ -825,6 +1202,12 @@ function drawSnowfall(dt, t){
 
 /* ============================================================
    DRAWING — the penguin
+   He's built from plain circles and ellipses, no images.
+
+   ctx.translate() moves the origin (0,0) to wherever the penguin is,
+   so every shape below can be positioned relative to HIM rather than
+   to the corner of the screen. save() and restore() are the undo:
+   everything between them is temporary.
 ============================================================ */
 function drawPenguin(){
   const ducking = peng.ducking;
@@ -862,6 +1245,8 @@ function drawPenguin(){
 }
 
 function drawRunPose(h){
+  // Math.sin() bounces smoothly between -1 and +1 forever, which is
+  // perfect for legs and wings. Feed it "cycle" and the penguin runs.
   const step = Math.sin(peng.cycle);
   const air  = !peng.onGround;
 
@@ -1010,7 +1395,9 @@ function drawObstacles(){
       ctx.strokeStyle = "rgba(40,110,150,.45)"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.moveTo(x + w*.5, y); ctx.lineTo(x + w*.5, GROUND_Y); ctx.stroke();
     } else {
-      // frozen chain holding the blade — solid, so you must duck
+      /* The chain is not decoration — it counts as solid in hits().
+         That's what makes ducking the ONLY way past a sawblade, since
+         otherwise a big jump could sail over the top of the blade. */
       const top = o.y - o.r + 8;
       ctx.strokeStyle = "#7C93A6"; ctx.lineWidth = 3;
       ctx.fillStyle = "#BFD9EA";
@@ -1110,28 +1497,30 @@ function drawHUD(){
   ctx.save();
   ctx.textBaseline = "top";
 
-  // score
-  ctx.font = '800 34px "Baloo 2", system-ui, sans-serif';
+  // score + snowflakes, one row, top left
   ctx.textAlign = "left";
+  ctx.font = '800 34px "Baloo 2", system-ui, sans-serif';
   ctx.fillStyle = "rgba(6,20,40,.45)";
   ctx.fillText(String(score), 25, 21);
   ctx.fillStyle = "#FFC53D";
   ctx.fillText(String(score), 23, 19);
-  ctx.font = '700 13px Nunito, system-ui, sans-serif';
-  ctx.fillStyle = "rgba(220,243,255,.75)";
-  ctx.fillText("POINTS", 25, 54);
+  const scoreW = ctx.measureText(String(score)).width;
 
-  // flakes collected
-  ctx.textAlign = "right";
+  ctx.font = '700 15px Nunito, system-ui, sans-serif';
+  ctx.fillStyle = "rgba(255,197,61,.8)";
+  ctx.fillText("pts", 23 + scoreW + 7, 33);
+  const ptsW = ctx.measureText("pts").width;
+
+  const flakeX = 23 + scoreW + 7 + ptsW + 16;
+  ctx.fillStyle = "rgba(220,243,255,.35)";
+  ctx.fillText("·", flakeX - 9, 33);
+
   ctx.font = '800 26px "Baloo 2", system-ui, sans-serif';
   ctx.fillStyle = "#EAFBFF";
-  ctx.fillText(`❄ ${flakeCount}`, W - 24, 24);
-  ctx.font = '700 13px Nunito, system-ui, sans-serif';
-  ctx.fillStyle = "rgba(220,243,255,.7)";
-  ctx.fillText("SNOWFLAKES", W - 24, 54);
+  ctx.fillText(`❄ ${flakeCount}`, flakeX, 24);
 
   // power-up pills
-  let px = 24, py = 78;
+  let px = 24, py = 62;
   const pill = (label, col, frac) => {
     ctx.textAlign = "left";
     ctx.fillStyle = "rgba(6,20,40,.55)";
@@ -1169,32 +1558,33 @@ function drawHUD(){
     ctx.globalAlpha = 1;
   }
 
-  if (muted){
-    ctx.textAlign = "right";
-    ctx.font = '700 12px Nunito, system-ui, sans-serif';
-    ctx.fillStyle = "rgba(220,243,255,.5)";
-    ctx.fillText("sound off (M)", W - 24, 78);
-  }
   ctx.restore();
 }
 
 /* ============================================================
    MAIN LOOP
+   The heartbeat. requestAnimationFrame asks the browser to call
+   frame() again just before the next screen refresh — about 60
+   times a second — and it politely pauses when the tab is hidden.
 ============================================================ */
 let last = performance.now();
 function frame(now){
-  let dt = (now - last) / 1000;
+  let dt = (now - last) / 1000;     // seconds since the previous frame
   last = now;
-  dt = Math.min(dt, 1/30);          // stay stable if the tab stalls
+  // Safety clamp: if the tab froze for two seconds, don't teleport
+  // everything forward and drop the penguin through an iceberg.
+  dt = Math.min(dt, 1/30);
   const t = now / 1000;
 
-  if (state !== "paused") update(dt);
+  if (state !== "paused") update(dt);        // step the world forward
 
   ctx.save();
+  // Screen shake on a crash: nudge everything a random pixel or two.
   if (shakeT > 0){
     ctx.translate((Math.random()-.5) * shakeT * 22, (Math.random()-.5) * shakeT * 22);
   }
 
+  // Draw order = layer order. Whatever is painted last sits on top.
   drawSky(t);
   drawGround(t);
   drawObstacles();
@@ -1216,6 +1606,7 @@ function frame(now){
 }
 requestAnimationFrame(frame);
 
+renderMusicMenu();
 toMenu();
 })();
 </script>
